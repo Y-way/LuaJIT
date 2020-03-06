@@ -1,6 +1,6 @@
 /*
 ** Lexical analyzer.
-** Copyright (C) 2005-2017 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2020 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Major portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -46,11 +46,15 @@ TKDEF(TKSTR1, TKSTR2)
 static LJ_NOINLINE LexChar lex_more(LexState *ls)
 {
   size_t sz;
-  const char *p = ls->rfunc(ls->L, ls->rdata, &sz);
-  if (p == NULL || sz == 0) return LEX_EOF;
-  ls->pe = p + sz;
-  ls->p = p + 1;
-  return (LexChar)(uint8_t)p[0];
+  const char *buf = ls->rfunc(ls->L, ls->rdata, &sz);
+  if (buf == NULL || sz == 0) return END_OF_STREAM;
+  if (sz >= LJ_MAX_MEM) {
+    if (sz != ~(size_t)0) lj_err_mem(ls->L);
+    ls->endmark = 1;
+  }
+  ls->n = (MSize)sz - 1;
+  ls->p = buf;
+  return char2int(*(ls->p++));
 }
 
 /* Get next character. */
@@ -408,9 +412,12 @@ int lj_lex_setup(lua_State *L, LexState *ls)
   ls->lookahead = TK_eof;  /* No look-ahead token. */
   ls->linenumber = 1;
   ls->lastline = 1;
-  lex_next(ls);  /* Read-ahead first char. */
-  if (ls->c == 0xef && ls->p + 2 <= ls->pe && (uint8_t)ls->p[0] == 0xbb &&
-      (uint8_t)ls->p[1] == 0xbf) {  /* Skip UTF-8 BOM (if buffered). */
+  ls->endmark = 0;
+  lj_str_resizebuf(ls->L, &ls->sb, LJ_MIN_SBUF);
+  next(ls);  /* Read-ahead first char. */
+  if (ls->current == 0xef && ls->n >= 2 && char2int(ls->p[0]) == 0xbb &&
+      char2int(ls->p[1]) == 0xbf) {  /* Skip UTF-8 BOM (if buffered). */
+    ls->n -= 2;
     ls->p += 2;
     lex_next(ls);
     header = 1;
